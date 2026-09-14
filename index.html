@@ -21,7 +21,6 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
-    <!-- Firebase SDK (v11) for Real-Time Cross-Device Sync -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
@@ -34,7 +33,7 @@
 
         async function initFirebaseSync() {
             try {
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'church-invitations-app';
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'church-invitations-app-sec';
                 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
                     apiKey: "demo-key",
                     authDomain: "demo.firebaseapp.com",
@@ -72,45 +71,31 @@
         function setupFirestoreListener() {
             if (!window.invitationsCollectionRef) return;
 
-            updateSyncUIStatus(true, "مزامنة سحابية مباشرة ⚡");
-
             onSnapshot(window.invitationsCollectionRef, (snapshot) => {
                 const remoteItems = [];
-
-                snapshot.docChanges().forEach((change) => {
-                    if (change.type === "added") {
-                        const data = change.doc.data();
-                        const currentList = window.invitations || [];
-                        const exists = currentList.some(i => i.code.trim().toUpperCase() === data.code.trim().toUpperCase());
-                        if (!exists && currentList.length > 0) {
-                            showToast(`🎉 وصلت دعوة جديدة: ${data.name} (${data.grade})`, 'info');
-                            playChime('success');
-                        }
-                    }
-                });
 
                 snapshot.docs.forEach((docSnap) => {
                     remoteItems.push(docSnap.data());
                 });
 
-                // Sort newest first
-                remoteItems.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
-                window.invitations = remoteItems;
-                if (typeof saveInvitationsLocal === 'function') {
-                    saveInvitationsLocal();
+                if (typeof window.mergeRemoteInvitations === 'function') {
+                    window.mergeRemoteInvitations(remoteItems);
                 }
-                updateSyncUIStatus(true, "متصل ومزامن لحظياً ⚡");
             }, (error) => {
                 console.error("Firestore sync listener error:", error);
-                updateSyncUIStatus(false, "إعادة الاتصال...");
             });
         }
 
         window.saveToFirestore = async function(item) {
             if (!window.db || !window.invitationsCollectionRef) return;
             try {
+                // Strip photo if huge for firestore document speed
+                const docData = { ...item };
+                if (docData.photo && docData.photo.length > 50000) {
+                    docData.photo = null;
+                }
                 const docRef = doc(window.db, window.invitationsCollectionRef.path, item.code.trim().toUpperCase());
-                await setDoc(docRef, item, { merge: true });
+                await setDoc(docRef, docData, { merge: true });
             } catch (e) {
                 console.error("Error saving to Firestore:", e);
             }
@@ -143,10 +128,12 @@
             if (!window.db || !window.invitationsCollectionRef) return;
             try {
                 const batch = writeBatch(window.db);
-                invitations.forEach(item => {
-                    const docRef = doc(window.db, window.invitationsCollectionRef.path, item.code.trim().toUpperCase());
-                    batch.delete(docRef);
-                });
+                if (window.invitations) {
+                    window.invitations.forEach(item => {
+                        const docRef = doc(window.db, window.invitationsCollectionRef.path, item.code.trim().toUpperCase());
+                        batch.delete(docRef);
+                    });
+                }
                 await batch.commit();
             } catch (e) {
                 console.error("Error clearing Firestore:", e);
@@ -180,7 +167,7 @@
         ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
         ::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.5); border-radius: 3px; }
     </style>
-<meta property="og:title" content="تطبيق الدعوات الإلكترونية والماسح الذكي" data-id="th-modified" ><meta name="description" content="code_artifact (1)" data-id="th-modified" ><meta property="og:description" content="code_artifact (1)" data-id="th-modified" ><meta property="og:image" content="https://tiiny.host/assets/logo-purple-bg.png" data-id="th-modified" ><meta property="og:image:width" content="1501" data-id="th-modified" ><meta property="og:image:height" content="1501" data-id="th-modified" ><meta property="og:image:type" content="image/png" data-id="th-modified" ><meta property="og:url" content="https://olive-danya-53.tiiny.site/" data-id="th-modified" ><meta property="og:type" content="website" data-id="th-modified" ><script defer data-domain="olive-danya-53.tiiny.site" src="https://analytics.tiiny.net/js/plausible.js"></script><script type="text/javascript" src="https://tiiny.host/ad-script.js"></script></head>
+<meta property="og:title" content="تطبيق الدعوات الإلكترونية والماسح الذكي" data-id="th-modified" ><meta name="description" content="code_artifact (2)" data-id="th-modified" ><meta property="og:description" content="code_artifact (2)" data-id="th-modified" ><meta property="og:image" content="https://tiiny.host/assets/logo-purple-bg.png" data-id="th-modified" ><meta property="og:image:width" content="1501" data-id="th-modified" ><meta property="og:image:height" content="1501" data-id="th-modified" ><meta property="og:image:type" content="image/png" data-id="th-modified" ><meta property="og:url" content="https://violet-gabbey-35.tiiny.site/" data-id="th-modified" ><meta property="og:type" content="website" data-id="th-modified" ><script defer data-domain="violet-gabbey-35.tiiny.site" src="https://analytics.tiiny.net/js/plausible.js"></script><script type="text/javascript" src="https://tiiny.host/ad-script.js"></script></head>
 <body class="p-3 md:p-6 pb-20">
 
     <header class="max-w-4xl mx-auto mb-6">
@@ -206,10 +193,10 @@
                     <span class="w-2 h-2 rounded-full bg-amber-400 badge-pulse"></span>
                     <span id="syncStatusText">جاري الاتصال...</span>
                 </div>
-                <button onclick="switchTab('user')" id="nav-user-btn" class="px-4 py-2 rounded-xl text-sm font-bold bg-purple-600 text-white shadow-lg transition">
+                <button onclick="switchTab('user')" id="nav-user-btn" class="px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-purple-600 text-white shadow-lg transition">
                     <i class="fa-solid fa-ticket ml-1"></i> إنشاء دعوة
                 </button>
-                <button onclick="switchTab('admin')" id="nav-admin-btn" class="px-4 py-2 rounded-xl text-sm font-bold bg-slate-800 text-gray-300 hover:bg-slate-700 transition">
+                <button onclick="switchTab('admin')" id="nav-admin-btn" class="px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-slate-800 text-gray-300 hover:bg-slate-700 transition">
                     <i class="fa-solid fa-user-shield ml-1"></i> الخادمات
                 </button>
             </div>
@@ -376,7 +363,7 @@
                 </div>
 
                 <!-- Statistics Cards -->
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div class="glass-card p-5 border-purple-500/20">
                         <div class="text-xs text-gray-400 font-bold">إجمالي الدعوات المسجلة</div>
                         <div id="statTotalCount" class="text-3xl font-black text-purple-300 mt-2">0</div>
@@ -498,12 +485,51 @@
         </div>
     </div>
 
+    <!-- Modal confirmation for Single Item Deletion -->
+    <div id="deleteConfirmModal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-center justify-center p-4">
+        <div class="glass-card w-full max-w-md p-6 bg-slate-950/95 border-red-500/40 text-center space-y-4 relative">
+            <div class="w-14 h-14 rounded-full bg-red-950/80 border border-red-500/50 flex items-center justify-center mx-auto text-red-400 text-2xl">
+                <i class="fa-solid fa-trash-can"></i>
+            </div>
+            <h3 class="text-lg font-black text-white">تأكيد حذف الدعوة نهائياً</h3>
+            <p class="text-xs text-gray-300">هل أنتِ متأكدة من حذف هذه الدعوة بشكل كامل؟ سيتم مسحها فوراً من هذا الجهاز ومن جميع الأجهزة الأخرى المتصلة بالقناة ولن تظهر بعد تحديث الصفحة.</p>
+            <div class="flex items-center gap-3 pt-2">
+                <button onclick="confirmDeleteAction()" class="flex-1 py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition">
+                    نعم، احذف الدعوة نهائياً
+                </button>
+                <button onclick="closeDeleteModal()" class="flex-1 py-3 rounded-xl bg-slate-800 text-gray-300 hover:bg-slate-700 font-bold text-xs transition">
+                    إلغاء
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal confirmation for Clear All Invitations -->
+    <div id="clearAllConfirmModal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-center justify-center p-4">
+        <div class="glass-card w-full max-w-md p-6 bg-slate-950/95 border-red-500/40 text-center space-y-4 relative">
+            <div class="w-14 h-14 rounded-full bg-red-950/80 border border-red-500/50 flex items-center justify-center mx-auto text-red-400 text-2xl">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <h3 class="text-lg font-black text-white">تأكيد مسح جميع الدعوات</h3>
+            <p class="text-xs text-gray-300">تنبيه: سيتم مسح كافة سجلات والدعوات المسجلة بالكامل من السحابة وجميع الأجهزة. هل تودين الاستمرار؟</p>
+            <div class="flex items-center gap-3 pt-2">
+                <button onclick="confirmClearAllAction()" class="flex-1 py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition">
+                    نعم، امسح كل البيانات
+                </button>
+                <button onclick="closeClearAllModal()" class="flex-1 py-3 rounded-xl bg-slate-800 text-gray-300 hover:bg-slate-700 font-bold text-xs transition">
+                    إلغاء
+                </button>
+            </div>
+        </div>
+    </div>
+
     <canvas id="qrCanvas" class="hidden"></canvas>
 
     <script>
         var invitations = [];
         window.invitations = invitations;
-        const STORAGE_KEY = 'church_invitations_data_v1';
+        const STORAGE_KEY = 'church_invitations_data_v2';
+        const DELETED_KEY = 'church_deleted_codes_v2';
         const ADMIN_PASSWORD = '968351';
         let sseEventSource = null;
         let html5QrcodeScanner = null;
@@ -512,6 +538,23 @@
         let lastScannedTime = 0;
         let currentCreatedTicketName = "دعوة";
         let selectedGuestPhotoData = null;
+        let pendingDeleteCode = null;
+
+        function getDeletedCodes() {
+            try {
+                const stored = localStorage.getItem(DELETED_KEY);
+                return new Set(stored ? JSON.parse(stored) : []);
+            } catch(e) {
+                return new Set();
+            }
+        }
+
+        function addDeletedCode(code) {
+            if (!code) return;
+            const set = getDeletedCodes();
+            set.add(code.trim().toUpperCase());
+            localStorage.setItem(DELETED_KEY, JSON.stringify(Array.from(set)));
+        }
 
         function getSyncRoomKey() {
             return localStorage.getItem('sync_room_key') || 'sec-girls-2026';
@@ -565,9 +608,12 @@
             loadInvitationsFromLocal();
             renderTicketPreview(null);
             initRealtimeSyncStream();
+            
+            // Periodic lightweight sync every 8 seconds to guarantee stability across devices
+            setInterval(fetchLatestCloudData, 8000);
         });
 
-        function compressImage(file, maxWidth = 300, maxHeight = 300, quality = 0.7) {
+        function compressImage(file, maxWidth = 250, maxHeight = 250, quality = 0.6) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
@@ -596,7 +642,6 @@
                         const ctx = canvas.getContext('2d');
                         ctx.drawImage(img, 0, 0, width, height);
 
-                        // Compress and export as JPEG base64 string
                         resolve(canvas.toDataURL('image/jpeg', quality));
                     };
                     img.onerror = reject;
@@ -612,7 +657,7 @@
 
             if (file) {
                 nameSpan.textContent = file.name;
-                compressImage(file, 300, 300, 0.7).then(compressedData => {
+                compressImage(file, 250, 250, 0.6).then(compressedData => {
                     selectedGuestPhotoData = compressedData;
                     imgPreview.src = selectedGuestPhotoData;
                     imgPreview.classList.remove('hidden');
@@ -625,6 +670,15 @@
                 selectedGuestPhotoData = null;
                 imgPreview.classList.add('hidden');
             }
+        }
+
+        function prepareLightweightItem(item) {
+            // Strip photo data before broadcasting over lightweight realtime stream to avoid body payload limits
+            const copy = { ...item };
+            if (copy.photo && copy.photo.length > 500) {
+                copy.photo = null;
+            }
+            return copy;
         }
 
         function handleCreateInvitation(e) {
@@ -656,7 +710,10 @@
             if (window.saveToFirestore) {
                 window.saveToFirestore(newInvitation);
             }
-            broadcastNetworkEvent({ type: 'NEW_INVITATION', item: newInvitation });
+
+            // Broadcast lightweight version so ntfy POST never fails due to heavy base64
+            const lightItem = prepareLightweightItem(newInvitation);
+            broadcastNetworkEvent({ type: 'NEW_INVITATION', item: lightItem });
 
             renderTicketPreview(newInvitation);
             showToast('تم إنشاء الدعوة ومزامنتها على جميع الأجهزة بنجاح! ✨', 'success');
@@ -776,19 +833,19 @@
             updateStats();
         }
 
-        function saveInvitationsLocal() {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(invitations));
-            renderTable();
-            updateStats();
-        }
-
         function mergeRemoteInvitations(remoteList) {
             if (!Array.isArray(remoteList)) return;
-            const map = new Map(invitations.map(i => [i.code.trim().toUpperCase(), i]));
-            let updated = false;
+            const deletedSet = getDeletedCodes();
 
-            remoteList.forEach(item => {
-                if (!item || !item.code) return;
+            // Filter out any locally deleted codes from incoming remote items
+            const validRemote = remoteList.filter(item => item && item.code && !deletedSet.has(item.code.trim().toUpperCase()));
+
+            // Filter current local items to remove any deleted codes
+            const filteredLocal = invitations.filter(i => !deletedSet.has(i.code.trim().toUpperCase()));
+            const map = new Map(filteredLocal.map(i => [i.code.trim().toUpperCase(), i]));
+            let updated = (filteredLocal.length !== invitations.length);
+
+            validRemote.forEach(item => {
                 const codeKey = item.code.trim().toUpperCase();
                 const existing = map.get(codeKey);
 
@@ -796,9 +853,15 @@
                     map.set(codeKey, item);
                     updated = true;
                 } else {
+                    // Update attendance status if marked attended elsewhere
                     if (!existing.attended && item.attended) {
                         existing.attended = true;
                         existing.attendedAt = item.attendedAt || new Date().toISOString();
+                        updated = true;
+                    }
+                    // Keep existing photo locally if remote didn't carry it
+                    if (!existing.photo && item.photo) {
+                        existing.photo = item.photo;
                         updated = true;
                     }
                 }
@@ -806,19 +869,19 @@
 
             if (updated) {
                 invitations = Array.from(map.values());
+                // Sort newest created first
+                invitations.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
                 saveInvitationsLocal();
             }
         }
+        window.mergeRemoteInvitations = mergeRemoteInvitations;
 
         function getChannelTopic() {
             return `church_sec_girls_${getSyncRoomKey()}`;
         }
 
-        async function initRealtimeSyncStream() {
+        async function fetchLatestCloudData() {
             const topic = getChannelTopic();
-            updateSyncUIStatus(false, 'جاري جلب السجل السحابي...');
-
-            // Step 1: Fetch history from remote pub-sub stream to restore items created on other devices
             try {
                 const historyRes = await fetch(`https://ntfy.sh/${topic}/json?poll=1`);
                 if (historyRes.ok) {
@@ -837,10 +900,16 @@
                     });
                 }
             } catch(e) {
-                console.warn("History fetch notice:", e);
+                console.warn("Poll cloud sync warning:", e);
             }
+        }
 
-            // Step 2: Establish real-time Server-Sent Events (SSE) live connection
+        async function initRealtimeSyncStream() {
+            const topic = getChannelTopic();
+            updateSyncUIStatus(false, 'جاري المزامنة السحابية...');
+
+            await fetchLatestCloudData();
+
             if (sseEventSource) {
                 sseEventSource.close();
             }
@@ -849,7 +918,7 @@
                 sseEventSource = new EventSource(`https://ntfy.sh/${topic}/sse`);
                 
                 sseEventSource.onopen = function() {
-                    updateSyncUIStatus(true, 'متصل سحابياً (مباشر)');
+                    updateSyncUIStatus(true, 'متصل ومزامن لحظياً ⚡');
                 };
 
                 sseEventSource.onmessage = function(event) {
@@ -863,7 +932,7 @@
                 };
 
                 sseEventSource.onerror = function() {
-                    updateSyncUIStatus(false, 'إعادة المحاولة...');
+                    updateSyncUIStatus(false, 'إعادة الاتصال...');
                 };
             } catch(e) {
                 updateSyncUIStatus(false, 'وضع احتياطي');
@@ -877,7 +946,7 @@
                 if (payload.item) {
                     mergeRemoteInvitations([payload.item]);
                     if (isLive) {
-                        showToast(`🎉 دعوة جديدة: ${payload.item.name} (${payload.item.grade})`, 'info');
+                        showToast(`🎉 وصلت دعوة جديدة: ${payload.item.name} (${payload.item.grade})`, 'info');
                         playChime('success');
                     }
                 }
@@ -888,10 +957,21 @@
                     target.attendedAt = payload.attendedAt || new Date().toISOString();
                     saveInvitationsLocal();
                     if (isLive) {
-                        showToast(`✅ تم تسحيل دخول: ${target.name}`, 'success');
+                        showToast(`✅ تم تسجيل حضور: ${target.name}`, 'success');
+                    }
+                }
+            } else if (payload.type === 'DELETE_INVITATION') {
+                if (payload.code) {
+                    const cleanCode = payload.code.trim().toUpperCase();
+                    addDeletedCode(cleanCode);
+                    invitations = invitations.filter(i => i.code.trim().toUpperCase() !== cleanCode);
+                    saveInvitationsLocal();
+                    if (isLive) {
+                        showToast('🗑️ تم حذف إحدى الدعوات بواسطة خادمة أخرى', 'info');
                     }
                 }
             } else if (payload.type === 'CLEAR_ALL') {
+                invitations.forEach(i => addDeletedCode(i.code));
                 invitations = [];
                 saveInvitationsLocal();
             } else if (payload.type === 'BULK_SYNC') {
@@ -916,9 +996,10 @@
 
         function triggerManualSync() {
             showToast('جاري تحديث وتزامن البيانات مع السحابة...', 'info');
-            initRealtimeSyncStream().then(() => {
-                // Broadcast bulk list to ensure parity
-                broadcastNetworkEvent({ type: 'BULK_SYNC', data: invitations });
+            fetchLatestCloudData().then(() => {
+                // Prepare light bulk list for broadcast
+                const lightList = invitations.map(i => prepareLightweightItem(i));
+                broadcastNetworkEvent({ type: 'BULK_SYNC', data: lightList });
                 showToast('تمت المزامنة بنجاح!', 'success');
             });
         }
@@ -980,7 +1061,6 @@
             if (isScannerActive) return;
             html5QrcodeScanner = new Html5Qrcode("reader");
             
-            // إعدادات الكاميرا لمعدل إطارات سلس وسريع جداً بدون تقطيع
             const config = { 
                 fps: 25, 
                 qrbox: { width: 240, height: 240 },
@@ -1006,11 +1086,10 @@
             }
         }
 
-        function processScannedCode(scannedCode) {
+        async function processScannedCode(scannedCode) {
             if (!scannedCode) return;
             const cleanCode = scannedCode.trim().toUpperCase();
 
-            // منع الـ Lag والتكرار السريع لأجل فتح الكاميرا واستمراريتها بسلاسة
             const now = Date.now();
             if (cleanCode === lastScannedCode && (now - lastScannedTime) < 2000) {
                 return;
@@ -1018,14 +1097,24 @@
             lastScannedCode = cleanCode;
             lastScannedTime = now;
 
-            const targetIndex = invitations.findIndex(item => item.code.trim().toUpperCase() === cleanCode);
             const alertBox = document.getElementById('scannerAlert');
             alertBox.classList.remove('hidden', 'bg-emerald-950', 'text-emerald-300', 'bg-red-950', 'text-red-300', 'border-emerald-500/50', 'border-red-500/50');
+
+            let targetIndex = invitations.findIndex(item => item.code.trim().toUpperCase() === cleanCode);
+
+            // AUTO CLOUD CHECK: If code not found locally, fetch cloud immediately before giving error!
+            if (targetIndex === -1) {
+                alertBox.className = "p-3 rounded-xl text-xs font-bold text-center bg-purple-950 text-purple-300 border border-purple-500/50 animate-pulse";
+                alertBox.innerHTML = `🔍 جاري البحث السحابي عن كود الدعوة (${cleanCode})...`;
+                
+                await fetchLatestCloudData();
+                targetIndex = invitations.findIndex(item => item.code.trim().toUpperCase() === cleanCode);
+            }
 
             if (targetIndex === -1) {
                 playChime('warning');
                 alertBox.className = "p-3 rounded-xl text-xs font-bold text-center bg-red-950 text-red-300 border border-red-500/50";
-                alertBox.innerHTML = `⚠️ كود غير معروف: (${cleanCode}). لم يتم العثور على هذه الدعوة!<br><span class="text-[11px] font-normal text-gray-300">تأكد من اضغط زر "مزامنة سريعة" لجلب كافة الدعوات الجديدة.</span>`;
+                alertBox.innerHTML = `⚠️ كود غير معروف: (${cleanCode}). لم يتم العثور على هذه الدعوة!<br><span class="text-[11px] font-normal text-gray-300">تأكد أن الجهاز الآخر متصل بالإنترنت ومزامن على نفس القناة.</span>`;
                 return;
             }
 
@@ -1141,26 +1230,56 @@
         }
 
         function deleteInvitation(code) {
-            if (confirm("هل أنت متأكد من حذف هذه الدعوة بشكل نهائي؟")) {
-                invitations = invitations.filter(item => item.code !== code);
-                saveInvitationsLocal();
-                if (window.deleteFromFirestore) {
-                    window.deleteFromFirestore(code);
-                }
-                showToast('تم حذف الدعوة بنجاح', 'success');
+            pendingDeleteCode = code;
+            document.getElementById('deleteConfirmModal').classList.remove('hidden');
+        }
+
+        function closeDeleteModal() {
+            pendingDeleteCode = null;
+            document.getElementById('deleteConfirmModal').classList.add('hidden');
+        }
+
+        function confirmDeleteAction() {
+            if (!pendingDeleteCode) return;
+            const cleanCode = pendingDeleteCode.trim().toUpperCase();
+
+            // 1. Add to deleted codes memory to ignore any historic ntfy logs
+            addDeletedCode(cleanCode);
+
+            // 2. Remove locally
+            invitations = invitations.filter(item => item.code.trim().toUpperCase() !== cleanCode);
+            saveInvitationsLocal();
+
+            // 3. Delete from Firestore cloud database
+            if (window.deleteFromFirestore) {
+                window.deleteFromFirestore(cleanCode);
             }
+
+            // 4. Broadcast DELETE event to all connected devices in realtime
+            broadcastNetworkEvent({ type: 'DELETE_INVITATION', code: cleanCode });
+
+            showToast('تم حذف الدعوة نهائياً ولن تظهر على أي جهاز', 'success');
+            closeDeleteModal();
         }
 
         function clearAllInvitations() {
-            if (confirm("هل أنتِ متأكدة من مسح جميع الدعوات المسجلة بالكامل؟ لا يمكن التراجع عن هذا الإجراء.")) {
-                if (window.clearAllFromFirestore) {
-                    window.clearAllFromFirestore();
-                }
-                invitations = [];
-                saveInvitationsLocal();
-                broadcastNetworkEvent({ type: 'CLEAR_ALL' });
-                showToast('تم مسح جميع الدعوات بنجاح', 'success');
+            document.getElementById('clearAllConfirmModal').classList.remove('hidden');
+        }
+
+        function closeClearAllModal() {
+            document.getElementById('clearAllConfirmModal').classList.add('hidden');
+        }
+
+        function confirmClearAllAction() {
+            if (window.clearAllFromFirestore) {
+                window.clearAllFromFirestore();
             }
+            invitations.forEach(i => addDeletedCode(i.code));
+            invitations = [];
+            saveInvitationsLocal();
+            broadcastNetworkEvent({ type: 'CLEAR_ALL' });
+            showToast('تم مسح جميع الدعوات بنجاح', 'success');
+            closeClearAllModal();
         }
 
         function updateStats() {
@@ -1191,21 +1310,17 @@
                 "م": idx + 1,
                 "اسم المدعوة": item.name,
                 "السنة الدراسية": item.grade,
-                "رقم الهاتف": item.phone || '-',
+                "رقم الموبايل": item.phone || 'غير محدد',
                 "كود الدعوة": item.code,
                 "حالة الحضور": item.attended ? "حَضَرَت" : "لم تحضر بعد",
-                "توقيت تسجيل الحضور": item.attendedAt ? new Date(item.attendedAt).toLocaleString('ar-EG') : '-'
+                "توقيت الحضور": item.attendedAt ? new Date(item.attendedAt).toLocaleString('ar-EG') : '-'
             }));
 
-            const worksheet = XLSX.utils.json_to_sheet(formattedData);
-            if(!worksheet['!views']) worksheet['!views'] = [];
-            worksheet['!views'].push({RTL: true});
-
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "الحضور");
-
-            XLSX.writeFile(workbook, fileName);
-            showToast('تم تحميل ملف Excel بنجاح', 'success');
+            const ws = XLSX.utils.json_to_sheet(formattedData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "الدعوات");
+            XLSX.writeFile(wb, fileName);
+            showToast('تم تصدير ملف الإكسيل بنجاح! 📊', 'success');
         }
 
         function openBackupModal() {
@@ -1234,7 +1349,8 @@
                     const imported = JSON.parse(e.target.result);
                     if (Array.isArray(imported)) {
                         mergeRemoteInvitations(imported);
-                        broadcastNetworkEvent({ type: 'BULK_SYNC', data: invitations });
+                        const lightList = invitations.map(i => prepareLightweightItem(i));
+                        broadcastNetworkEvent({ type: 'BULK_SYNC', data: lightList });
                         showToast(`تم استيراد ${imported.length} دعوة بنجاح!`, 'success');
                         closeBackupModal();
                     } else {
