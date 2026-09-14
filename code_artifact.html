@@ -1,0 +1,1439 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تطبيق الدعوات الإلكترونية والماسح الذكي</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Fonts & Icons -->
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- QR Code Generator & Scanner Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+    
+    <!-- Excel (SheetJS) & HTML2Canvas Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        window.db = null;
+        window.auth = null;
+        window.currentUser = null;
+        window.invitationsCollectionRef = null;
+
+        async function initFirebaseSync() {
+            try {
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'church-invitations-app-sec';
+                const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+                    apiKey: "demo-key",
+                    authDomain: "demo.firebaseapp.com",
+                    projectId: "demo-project"
+                };
+
+                const app = initializeApp(firebaseConfig);
+                window.auth = getAuth(app);
+                window.db = getFirestore(app);
+
+                const initialToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                
+                if (initialToken) {
+                    try {
+                        const userCred = await signInWithCustomToken(window.auth, initialToken);
+                        window.currentUser = userCred.user;
+                    } catch (e) {
+                        const userCred = await signInAnonymously(window.auth);
+                        window.currentUser = userCred.user;
+                    }
+                } else {
+                    const userCred = await signInAnonymously(window.auth);
+                    window.currentUser = userCred.user;
+                }
+
+                if (window.currentUser && window.db) {
+                    const roomKey = localStorage.getItem('sync_room_key') || 'sec-girls-2026';
+                    window.invitationsCollectionRef = collection(window.db, 'artifacts', appId, 'public', 'data', `invitations_${roomKey}`);
+                    setupFirestoreListener();
+                }
+            } catch (err) {
+                console.warn("Firestore sync fallback active:", err);
+            }
+        }
+
+        function setupFirestoreListener() {
+            if (!window.invitationsCollectionRef) return;
+
+            onSnapshot(window.invitationsCollectionRef, (snapshot) => {
+                const remoteItems = [];
+
+                snapshot.docs.forEach((docSnap) => {
+                    remoteItems.push(docSnap.data());
+                });
+
+                if (typeof window.mergeRemoteInvitations === 'function') {
+                    window.mergeRemoteInvitations(remoteItems);
+                }
+
+                // Push any local item missing in remote Firestore
+                if (window.invitations && window.invitations.length > 0) {
+                    const remoteCodes = new Set(remoteItems.map(i => i.code ? i.code.trim().toUpperCase() : ''));
+                    window.invitations.forEach(localItem => {
+                        if (localItem && localItem.code && !remoteCodes.has(localItem.code.trim().toUpperCase())) {
+                            window.saveToFirestore(localItem);
+                        }
+                    });
+                }
+            }, (error) => {
+                console.error("Firestore sync listener error:", error);
+            });
+        }
+
+        window.saveToFirestore = async function(item) {
+            if (!window.db || !window.invitationsCollectionRef) return;
+            try {
+                const docData = { ...item };
+                const docRef = doc(window.db, window.invitationsCollectionRef.path, item.code.trim().toUpperCase());
+                await setDoc(docRef, docData, { merge: true });
+            } catch (e) {
+                console.error("Error saving to Firestore:", e);
+            }
+        };
+
+        window.updateAttendanceInFirestore = async function(code, attendedAt) {
+            if (!window.db || !window.invitationsCollectionRef) return;
+            try {
+                const docRef = doc(window.db, window.invitationsCollectionRef.path, code.trim().toUpperCase());
+                await updateDoc(docRef, {
+                    attended: true,
+                    attendedAt: attendedAt
+                });
+            } catch (e) {
+                console.error("Error updating attendance in Firestore:", e);
+            }
+        };
+
+        window.deleteFromFirestore = async function(code) {
+            if (!window.db || !window.invitationsCollectionRef) return;
+            try {
+                const docRef = doc(window.db, window.invitationsCollectionRef.path, code.trim().toUpperCase());
+                await deleteDoc(docRef);
+            } catch (e) {
+                console.error("Error deleting from Firestore:", e);
+            }
+        };
+
+        window.clearAllFromFirestore = async function() {
+            if (!window.db || !window.invitationsCollectionRef) return;
+            try {
+                const batch = writeBatch(window.db);
+                if (window.invitations) {
+                    window.invitations.forEach(item => {
+                        const docRef = doc(window.db, window.invitationsCollectionRef.path, item.code.trim().toUpperCase());
+                        batch.delete(docRef);
+                    });
+                }
+                await batch.commit();
+            } catch (e) {
+                console.error("Error clearing Firestore:", e);
+            }
+        };
+
+        initFirebaseSync();
+    </script>
+
+    <style>
+        * { font-family: 'Cairo', sans-serif; }
+        body { background-color: #0d0b18; color: #f3f4f6; min-height: 100vh; }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.04);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 1.25rem;
+        }
+        .gradient-btn {
+            background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 100%);
+            transition: all 0.3s ease;
+        }
+        .gradient-btn:hover {
+            opacity: 0.95;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px -10px rgba(236, 72, 153, 0.5);
+        }
+        .badge-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(15, 23, 42, 0.6); }
+        ::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.5); border-radius: 3px; }
+    </style>
+</head>
+<body class="p-3 md:p-6 pb-20">
+
+    <header class="max-w-4xl mx-auto mb-6">
+        <div class="glass-card p-4 flex flex-wrap items-center justify-between gap-4 border-b border-purple-500/20">
+            <div class="flex items-center space-x-3 space-x-reverse">
+                <div class="w-11 h-11 rounded-2xl bg-gradient-to-tr from-purple-600 to-pink-500 flex items-center justify-center text-white font-black text-xl shadow-lg shadow-purple-500/30 flex-shrink-0">
+                    <i class="fa-solid font-bold fa-cross"></i>
+                </div>
+                <div>
+                    <h1 class="text-sm sm:text-base font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-purple-300 leading-tight">
+                        كنيسة مارمرقس والأنبا شنودة رئيس المتوحدين 15 مايو
+                    </h1>
+                    <p class="text-xs font-bold text-purple-200 mt-0.5 flex items-center gap-1">
+                        <span>خدمة ثانوي بنات</span>
+                        <span class="text-[10px] text-gray-400 font-normal">| منظومة الدعوات الحية والماسح الذكي</span>
+                    </p>
+                </div>
+            </div>
+
+            <!-- Sync Indicator & Navigation -->
+            <div class="flex items-center gap-2">
+                <div id="syncStatusBadge" class="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-950/80 text-amber-300 border border-amber-500/30 flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-amber-400 badge-pulse"></span>
+                    <span id="syncStatusText">جاري الاتصال...</span>
+                </div>
+                <button onclick="switchTab('user')" id="nav-user-btn" class="px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-purple-600 text-white shadow-lg transition">
+                    <i class="fa-solid fa-ticket ml-1"></i> إنشاء دعوة
+                </button>
+                <button onclick="switchTab('admin')" id="nav-admin-btn" class="px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-slate-800 text-gray-300 hover:bg-slate-700 transition">
+                    <i class="fa-solid fa-user-shield ml-1"></i> الخادمات
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-4xl mx-auto space-y-6">
+
+        <!-- TAB 1: USER / INVITATION GENERATOR -->
+        <section id="tab-user" class="space-y-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Form Input -->
+                <div class="glass-card p-6 border-purple-500/20 shadow-xl">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-2 text-pink-400 font-bold">
+                            <i class="fa-solid fa-sparkles text-lg"></i>
+                            <h2>إصدار دعوة إلكترونية جديدة</h2>
+                        </div>
+                    </div>
+
+                    <form id="invitationForm" onsubmit="handleCreateInvitation(event)" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-300 mb-1">اسم المخدومة بالكامل *</label>
+                            <input type="text" id="guestName" required placeholder="أدخل الاسم بالكامل" 
+                                class="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-pink-500 transition">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-300 mb-1">السنة الدراسية *</label>
+                            <select id="guestGrade" required class="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-pink-500 transition">
+                                <option value="">اختر السنة الدراسية...</option>
+                                <option value="أولى ثانوي">أولى ثانوي</option>
+                                <option value="ثانية ثانوي">ثانية ثانوي</option>
+                                <option value="ثالثة ثانوي">ثالثة ثانوي</option>
+                                <option value="خادمة / ضيفة">خادمة / ضيفة</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-300 mb-1">رقم الموبايل (اختياري)</label>
+                            <input type="tel" id="guestPhone" placeholder="012xxxxxxxx" 
+                                class="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-pink-500 transition">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-gray-300 mb-1">صورة الشخص المدعو (اختياري)</label>
+                            <div class="flex items-center gap-3 bg-slate-900/80 border border-slate-700 rounded-xl p-2.5">
+                                <label for="guestPhoto" class="px-3 py-2 bg-purple-900/60 hover:bg-purple-800 border border-purple-500/40 text-purple-200 text-xs font-bold rounded-lg cursor-pointer transition flex items-center gap-1.5">
+                                    <i class="fa-solid fa-camera text-pink-400"></i>
+                                    <span>اختر صورة</span>
+                                </label>
+                                <input type="file" id="guestPhoto" accept="image/*" onchange="previewGuestPhoto(event)" class="hidden">
+                                <span id="guestPhotoName" class="text-xs text-gray-400 truncate flex-1">لم يتم اختيار صورة</span>
+                                <img id="guestPhotoPreview" src="" alt="" class="w-8 h-8 rounded-full object-cover hidden border border-pink-500/50">
+                            </div>
+                        </div>
+
+                        <button type="submit" class="w-full py-3.5 rounded-xl text-white font-bold gradient-btn shadow-lg flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i>
+                            إنشاء بطاقة الدعوة والـ QR
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Ticket Card Preview -->
+                <div class="glass-card p-6 flex flex-col items-center justify-center text-center border-purple-500/30 relative overflow-hidden">
+                    <div class="absolute -top-12 -right-12 w-32 h-32 bg-pink-500/20 rounded-full blur-2xl"></div>
+                    <div class="absolute -bottom-12 -left-12 w-32 h-32 bg-purple-500/20 rounded-full blur-2xl"></div>
+
+                    <div id="ticketCard" class="w-full max-w-sm bg-gradient-to-b from-slate-900 via-slate-900 to-purple-950 border border-purple-500/40 rounded-2xl p-6 shadow-2xl space-y-4">
+                        <div class="border-b border-purple-500/20 pb-3 flex flex-col items-center">
+                            <!-- Photo Avatar Container -->
+                            <div id="displayTicketPhotoContainer" class="w-20 h-20 rounded-full bg-slate-800 border-2 border-pink-500/60 flex items-center justify-center overflow-hidden mb-2 shadow-md">
+                                <i id="displayTicketAvatarIcon" class="fa-solid fa-user text-3xl text-purple-400"></i>
+                                <img id="displayTicketPhoto" src="" class="w-full h-full object-cover hidden" alt="صورة المدعو">
+                            </div>
+
+                            <div class="text-[11px] text-pink-400 font-bold uppercase tracking-wider">دعوة خاصة لحضور النهضة</div>
+                            <h3 id="displayTicketName" class="text-xl font-black text-white mt-1">الاسم مفرغ</h3>
+                            <span id="displayTicketGrade" class="inline-block mt-2 px-3 py-1 bg-purple-900/60 text-purple-200 text-xs font-bold rounded-full border border-purple-500/30">
+                                المرحلة الدراسية
+                            </span>
+                        </div>
+
+                        <div class="flex flex-col items-center justify-center py-2 bg-white/5 rounded-xl p-4 border border-white/10">
+                            <div id="qrcode" class="p-2 bg-white rounded-xl shadow-md"></div>
+                            <p class="text-[10px] text-gray-400 mt-2 font-mono" id="displayTicketCode">---</p>
+                        </div>
+
+                        <div class="text-xs text-gray-300 font-medium">
+                            يرجى الاحتفاظ بهذه الدعوة وإبراز كود الـ QR عند الدخول لسرعة تسجيل الحضور ✨
+                        </div>
+
+                        <button onclick="downloadTicketImage()" class="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-xs font-black text-white rounded-xl transition flex items-center justify-center gap-2 shadow-lg">
+                            <i class="fa-solid fa-image"></i> حفظ بطاقة الدعوة كصورة فوراً
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 2: ADMIN PANEL -->
+        <section id="tab-admin" class="hidden space-y-6">
+            <!-- Password Auth Overlay -->
+            <div id="adminAuthOverlay" class="glass-card p-8 max-w-md mx-auto text-center space-y-4">
+                <div class="w-16 h-16 rounded-full bg-purple-900/50 border border-purple-500/30 flex items-center justify-center mx-auto text-pink-400 text-2xl">
+                    <i class="fa-solid fa-lock"></i>
+                </div>
+                <h2 class="text-xl font-black text-white">تسجيل دخول الخادمات</h2>
+                <p class="text-xs text-gray-400">يرجى إدخال كلمة المرور للوصول إلى لوحة المنظمين والماسح الضوئي</p>
+                <div class="space-y-3">
+                    <input type="password" id="adminPassInput" placeholder="أدخل كلمة المرور..." 
+                        class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-center text-white text-lg font-bold tracking-widest focus:outline-none focus:border-purple-500">
+                    <button onclick="verifyAdminPassword()" class="w-full py-3 rounded-xl font-bold gradient-btn text-white">
+                        دخول اللوحة
+                    </button>
+                </div>
+            </div>
+
+            <!-- Admin Panel Content -->
+            <div id="adminPanelContent" class="hidden space-y-6">
+                <!-- Action Bar -->
+                <div class="glass-card p-4 flex flex-wrap items-center justify-between gap-4 border-purple-500/30">
+                    <div class="flex items-center gap-3">
+                        <button onclick="openScannerModal()" class="px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold shadow-lg shadow-emerald-600/30 flex items-center gap-2 transition">
+                            <i class="fa-solid fa-qrcode text-lg"></i>
+                            فتح الماسح الضوئي (الكاميرا)
+                        </button>
+                        <button onclick="triggerManualSync()" title="تحديث وتزامن سريعة" class="p-3 bg-purple-900/60 hover:bg-purple-800 border border-purple-500/40 text-purple-200 rounded-xl text-xs font-bold transition flex items-center gap-2">
+                            <i class="fa-solid fa-rotate"></i> مزامنة سريعة
+                        </button>
+                    </div>
+
+                    <!-- Export & Data Tools -->
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button onclick="exportToExcel('attended')" class="px-3 py-2 bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-200 text-xs font-bold rounded-xl transition flex items-center gap-1.5">
+                            <i class="fa-solid fa-file-excel text-emerald-400"></i> تصدير الحاضرات
+                        </button>
+                        <button onclick="exportToExcel('all')" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-gray-200 text-xs font-bold rounded-xl transition flex items-center gap-1.5">
+                            <i class="fa-solid fa-file-export"></i> الكشف الكامل
+                        </button>
+                        <button onclick="openBackupModal()" class="px-3 py-2 bg-purple-950 hover:bg-purple-900 border border-purple-500/40 text-purple-300 text-xs font-bold rounded-xl transition flex items-center gap-1.5">
+                            <i class="fa-solid fa-share-nodes"></i> نقل البيانات
+                        </button>
+                        <button onclick="clearAllInvitations()" class="px-3 py-2 bg-red-950/80 hover:bg-red-900 border border-red-500/40 text-red-200 text-xs font-bold rounded-xl transition flex items-center gap-1.5">
+                            <i class="fa-solid fa-trash-can text-red-400"></i> مسح جميع الدعوات
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Service Sync Channel Setup -->
+                <div class="glass-card p-4 flex flex-wrap items-center justify-between gap-3 border-pink-500/20">
+                    <div class="text-xs text-gray-300 flex items-center gap-2">
+                        <i class="fa-solid fa-network-wired text-pink-400"></i>
+                        <span>قناة الربط والمزامنة المشتركة:</span>
+                    </div>
+                    <div class="flex items-center gap-2 flex-1 max-w-xs">
+                        <input type="text" id="serviceRoomInput" value="sec-girls-2026" placeholder="رمز القناة" 
+                            class="bg-slate-900 border border-slate-700 text-xs text-white px-3 py-2 rounded-xl w-full focus:outline-none focus:border-purple-500">
+                        <button onclick="updateSyncRoom()" class="px-3 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold whitespace-nowrap">
+                            ربط القناة
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Statistics Cards -->
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div class="glass-card p-5 border-purple-500/20">
+                        <div class="text-xs text-gray-400 font-bold">إجمالي الدعوات المسجلة</div>
+                        <div id="statTotalCount" class="text-3xl font-black text-purple-300 mt-2">0</div>
+                    </div>
+                    <div class="glass-card p-5 border-emerald-500/20">
+                        <div class="text-xs text-emerald-400 font-bold">تم تسجيل الحضور</div>
+                        <div id="statAttendedCount" class="text-3xl font-black text-emerald-400 mt-2">0</div>
+                    </div>
+                    <div class="glass-card p-5 border-amber-500/20">
+                        <div class="text-xs text-amber-400 font-bold">في الانتظار</div>
+                        <div id="statPendingCount" class="text-3xl font-black text-amber-400 mt-2">0</div>
+                    </div>
+                </div>
+
+                <!-- Filters -->
+                <div class="glass-card p-4 flex flex-wrap items-center justify-between gap-3">
+                    <div class="relative flex-1 min-w-[200px]">
+                        <i class="fa-solid fa-magnifying-glass absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
+                        <input type="text" id="searchBox" oninput="renderTable()" placeholder="البحث بالاسم أو كود الدعوة..." 
+                            class="w-full bg-slate-900/90 border border-slate-700 rounded-xl pr-9 pl-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+                    </div>
+                    <select id="filterGrade" onchange="renderTable()" class="bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none">
+                        <option value="all">كل المراحل</option>
+                        <option value="أولى ثانوي">أولى ثانوي</option>
+                        <option value="ثانية ثانوي">ثانية ثانوي</option>
+                        <option value="ثالثة ثانوي">ثالثة ثانوي</option>
+                        <option value="خادمة / ضيفة">خادمة / ضيفة</option>
+                    </select>
+                </div>
+
+                <!-- Table View -->
+                <div class="glass-card overflow-hidden border-purple-500/20">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-right text-sm">
+                            <thead class="bg-slate-900/80 text-gray-400 text-xs border-b border-slate-800">
+                                <tr>
+                                    <th class="p-4">الاسم</th>
+                                    <th class="p-4">المرحلة</th>
+                                    <th class="p-4">الكود</th>
+                                    <th class="p-4">حالة الحضور</th>
+                                    <th class="p-4">توقيت الدخول</th>
+                                    <th class="p-4 text-center">إجراءات</th>
+                                </tr>
+                            </thead>
+                            <tbody id="invitationsTableBody" class="divide-y divide-slate-800/60">
+                                <!-- Dynamic Rows -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Scanner Modal -->
+    <div id="scannerModal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-center justify-center p-4">
+        <div class="glass-card w-full max-w-lg p-6 bg-slate-950/95 border-purple-500/40 space-y-4 relative">
+            <button onclick="closeScannerModal()" class="absolute top-4 left-4 text-gray-400 hover:text-white text-xl">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+
+            <div class="text-center space-y-1">
+                <h3 class="text-lg font-black text-white flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-camera text-pink-400"></i> ماسح الـ QR للخدمة
+                </h3>
+                <p class="text-xs text-gray-400">وجه الكاميرا نحو كود الدعوة أو ارفع صورة QR من الجهاز</p>
+            </div>
+
+            <div class="flex items-center justify-center">
+                <label class="w-full cursor-pointer py-3 px-4 bg-purple-950/60 hover:bg-purple-900/80 border border-purple-500/50 rounded-xl text-purple-200 text-xs font-bold text-center flex items-center justify-center gap-2 transition">
+                    <i class="fa-solid fa-file-arrow-up text-pink-400 text-base"></i>
+                    <span>رفع صورة QR من الجهاز بدلاً من الكاميرا</span>
+                    <input type="file" id="qrFileInput" accept="image/*" onchange="handleQRFileUpload(event)" class="hidden">
+                </label>
+            </div>
+
+            <!-- Viewport -->
+            <div class="relative rounded-2xl overflow-hidden bg-slate-900 border border-slate-700 min-h-[260px] flex items-center justify-center">
+                <div id="reader" class="w-full"></div>
+                <div id="scannerErrorMessage" class="hidden absolute inset-0 bg-slate-900/90 p-4 text-center text-xs text-red-400 flex flex-col items-center justify-center gap-2">
+                    <i class="fa-solid fa-triangle-exclamation text-2xl text-red-500"></i>
+                    <span>تعذر فتح الكاميرا، يرجى السماح بصلاحية الكاميرا أو استخدام زر رفع صورة QR.</span>
+                </div>
+            </div>
+
+            <div id="scannerAlert" class="hidden p-3 rounded-xl text-xs font-bold text-center"></div>
+
+            <div class="flex justify-between items-center">
+                <span class="text-[11px] text-gray-400">عدد الدعوات المسجلة بالجهاز: <b id="scannerStoredCount" class="text-purple-300">0</b></span>
+                <button onclick="closeScannerModal()" class="px-5 py-2 rounded-xl bg-slate-800 text-gray-300 hover:bg-slate-700 text-xs font-bold">
+                    إغلاق النافذة
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Backup & Data Transfer Modal -->
+    <div id="backupModal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-center justify-center p-4">
+        <div class="glass-card w-full max-w-lg p-6 bg-slate-950/95 border-purple-500/40 space-y-4 relative">
+            <button onclick="closeBackupModal()" class="absolute top-4 left-4 text-gray-400 hover:text-white text-xl">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+            <h3 class="text-lg font-black text-white flex items-center gap-2">
+                <i class="fa-solid fa-share-nodes text-purple-400"></i> نقل ومشاركة البيانات بين الأجهزة
+            </h3>
+            <p class="text-xs text-gray-400">في حالة ضعف الإنترنت، يمكنك تصدير الملف من التابلت واستيراده مباشرة على التليفون:</p>
+            
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                <button onclick="downloadJsonBackup()" class="p-4 bg-purple-900/40 border border-purple-500/40 hover:bg-purple-800/60 text-white rounded-xl text-xs font-bold text-center flex flex-col items-center gap-2 transition">
+                    <i class="fa-solid fa-download text-xl text-pink-400"></i>
+                    <span>تحميل ملف البيانات (JSON)</span>
+                </button>
+                <label class="p-4 bg-emerald-900/40 border border-emerald-500/40 hover:bg-emerald-800/60 text-white rounded-xl text-xs font-bold text-center flex flex-col items-center gap-2 transition cursor-pointer">
+                    <i class="fa-solid fa-upload text-xl text-emerald-400"></i>
+                    <span>دمج / استيراد ملف بيانات</span>
+                    <input type="file" id="importJsonInput" accept=".json" onchange="importJsonBackup(event)" class="hidden">
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal confirmation for Single Item Deletion -->
+    <div id="deleteConfirmModal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-center justify-center p-4">
+        <div class="glass-card w-full max-w-md p-6 bg-slate-950/95 border-red-500/40 text-center space-y-4 relative">
+            <div class="w-14 h-14 rounded-full bg-red-950/80 border border-red-500/50 flex items-center justify-center mx-auto text-red-400 text-2xl">
+                <i class="fa-solid fa-trash-can"></i>
+            </div>
+            <h3 class="text-lg font-black text-white">تأكيد حذف الدعوة نهائياً</h3>
+            <p class="text-xs text-gray-300">هل أنتِ متأكدة من حذف هذه الدعوة بشكل كامل؟ سيتم مسحها فوراً من هذا الجهاز ومن جميع الأجهزة الأخرى المتصلة بالقناة ولن تظهر بعد تحديث الصفحة.</p>
+            <div class="flex items-center gap-3 pt-2">
+                <button onclick="confirmDeleteAction()" class="flex-1 py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition">
+                    نعم، احذف الدعوة نهائياً
+                </button>
+                <button onclick="closeDeleteModal()" class="flex-1 py-3 rounded-xl bg-slate-800 text-gray-300 hover:bg-slate-700 font-bold text-xs transition">
+                    إلغاء
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal confirmation for Clear All Invitations -->
+    <div id="clearAllConfirmModal" class="fixed inset-0 bg-black/80 backdrop-blur-md z-50 hidden flex items-center justify-center p-4">
+        <div class="glass-card w-full max-w-md p-6 bg-slate-950/95 border-red-500/40 text-center space-y-4 relative">
+            <div class="w-14 h-14 rounded-full bg-red-950/80 border border-red-500/50 flex items-center justify-center mx-auto text-red-400 text-2xl">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <h3 class="text-lg font-black text-white">تأكيد مسح جميع الدعوات</h3>
+            <p class="text-xs text-gray-300">تنبيه: سيتم مسح كافة سجلات والدعوات المسجلة بالكامل من السحابة وجميع الأجهزة. هل تودين الاستمرار؟</p>
+            <div class="flex items-center gap-3 pt-2">
+                <button onclick="confirmClearAllAction()" class="flex-1 py-3 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition">
+                    نعم، امسح كل البيانات
+                </button>
+                <button onclick="closeClearAllModal()" class="flex-1 py-3 rounded-xl bg-slate-800 text-gray-300 hover:bg-slate-700 font-bold text-xs transition">
+                    إلغاء
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="qrCanvas" class="hidden"></canvas>
+
+    <script>
+        var invitations = [];
+        window.invitations = invitations;
+        const STORAGE_KEY = 'church_invitations_data_v2';
+        const DELETED_KEY = 'church_deleted_codes_v2';
+        const ADMIN_PASSWORD = '968351';
+        const APP_SESSION_START_TIME = Date.now(); // Ignore stale history events
+        let sseEventSource = null;
+        let html5QrcodeScanner = null;
+        let isScannerActive = false;
+        let lastScannedCode = '';
+        let lastScannedTime = 0;
+        let currentCreatedTicketName = "دعوة";
+        let selectedGuestPhotoData = null;
+        let pendingDeleteCode = null;
+
+        function switchTab(tab) {
+            const userTab = document.getElementById('tab-user');
+            const adminTab = document.getElementById('tab-admin');
+            const navUserBtn = document.getElementById('nav-user-btn');
+            const navAdminBtn = document.getElementById('nav-admin-btn');
+
+            if (tab === 'user') {
+                userTab.classList.remove('hidden');
+                adminTab.classList.add('hidden');
+                navUserBtn.className = "px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-purple-600 text-white shadow-lg transition";
+                navAdminBtn.className = "px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-slate-800 text-gray-300 hover:bg-slate-700 transition";
+            } else {
+                userTab.classList.add('hidden');
+                adminTab.classList.remove('hidden');
+                navAdminBtn.className = "px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-purple-600 text-white shadow-lg transition";
+                navUserBtn.className = "px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold bg-slate-800 text-gray-300 hover:bg-slate-700 transition";
+            }
+        }
+
+        function verifyAdminPassword() {
+            const passInput = document.getElementById('adminPassInput');
+            if (passInput && passInput.value.trim() === ADMIN_PASSWORD) {
+                document.getElementById('adminAuthOverlay').classList.add('hidden');
+                document.getElementById('adminPanelContent').classList.remove('hidden');
+                showToast('تم تسجيل الدخول بنجاح', 'success');
+            } else {
+                showToast('كلمة المرور غير صحيحة!', 'error');
+            }
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('invitationsTableBody');
+            if (!tbody) return;
+
+            const searchVal = (document.getElementById('searchBox')?.value || '').toLowerCase().trim();
+            const filterGrade = document.getElementById('filterGrade')?.value || 'all';
+
+            const filtered = invitations.filter(item => {
+                const matchesSearch = (item.name || '').toLowerCase().includes(searchVal) || (item.code || '').toLowerCase().includes(searchVal);
+                const matchesGrade = filterGrade === 'all' || item.grade === filterGrade;
+                return matchesSearch && matchesGrade;
+            });
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="p-8 text-center text-gray-500 text-xs">
+                            <i class="fa-solid fa-inbox text-2xl mb-2 block"></i>
+                            لا توجد سجلات مطابقة للبحث
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(item => {
+                const attendedBadge = item.attended 
+                    ? `<span class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1"><i class="fa-solid fa-check"></i> تم الحضور</span>`
+                    : `<span class="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-amber-950/80 text-amber-300 border border-amber-500/30 inline-flex items-center gap-1"><i class="fa-solid fa-clock"></i> منتظرة</span>`;
+
+                const timeDisplay = item.attendedAt 
+                    ? new Date(item.attendedAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+                    : '-';
+
+                return `
+                    <tr class="hover:bg-white/5 transition">
+                        <td class="p-4 font-bold text-white flex items-center gap-2">
+                            ${item.photo ? `<img src="${item.photo}" class="w-8 h-8 rounded-full object-cover border border-purple-500/40">` : `<div class="w-8 h-8 rounded-full bg-purple-900/50 flex items-center justify-center text-xs text-purple-300 font-bold"><i class="fa-solid fa-user"></i></div>`}
+                            <div>
+                                <div>${item.name}</div>
+                                <div class="text-[10px] text-gray-400 font-normal">${item.phone || ''}</div>
+                            </div>
+                        </td>
+                        <td class="p-4 text-xs text-purple-300 font-medium">${item.grade}</td>
+                        <td class="p-4 font-mono text-xs text-pink-400 font-bold">${item.code}</td>
+                        <td class="p-4">${attendedBadge}</td>
+                        <td class="p-4 text-xs text-gray-400">${timeDisplay}</td>
+                        <td class="p-4 text-center">
+                            <div class="flex items-center justify-center gap-2">
+                                <button onclick="toggleAttendance('${item.code}')" title="تغيير حالة الحضور" class="p-2 rounded-lg ${item.attended ? 'bg-amber-950/60 hover:bg-amber-900 text-amber-300' : 'bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300'} text-xs font-bold transition">
+                                    <i class="fa-solid ${item.attended ? 'fa-rotate-left' : 'fa-check'}"></i>
+                                </button>
+                                <button onclick="deleteInvitation('${item.code}')" title="حذف الدعوة" class="p-2 rounded-lg bg-red-950/60 hover:bg-red-900 text-red-300 text-xs font-bold transition">
+                                    <i class="fa-solid fa-trash"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function toggleAttendance(code) {
+            const item = invitations.find(i => i.code.trim().toUpperCase() === code.trim().toUpperCase());
+            if (!item) return;
+
+            item.attended = !item.attended;
+            item.attendedAt = item.attended ? new Date().toISOString() : null;
+
+            saveInvitationsLocal();
+
+            if (window.updateAttendanceInFirestore) {
+                window.updateAttendanceInFirestore(code, item.attendedAt);
+            }
+
+            broadcastNetworkEvent({
+                type: 'ATTENDANCE_UPDATE',
+                code: item.code,
+                attendedAt: item.attendedAt,
+                timestamp: Date.now()
+            });
+
+            showToast(item.attended ? `تم تسجيل حضور: ${item.name}` : `تم إلغاء تسجيل حضور: ${item.name}`, item.attended ? 'success' : 'info');
+            if (item.attended) playChime('success');
+        }
+
+        function deleteInvitation(code) {
+            pendingDeleteCode = code;
+            document.getElementById('deleteConfirmModal').classList.remove('hidden');
+        }
+
+        function confirmDeleteAction() {
+            if (!pendingDeleteCode) return;
+            const cleanCode = pendingDeleteCode.trim().toUpperCase();
+
+            addDeletedCode(cleanCode);
+            invitations = invitations.filter(i => i.code.trim().toUpperCase() !== cleanCode);
+            saveInvitationsLocal();
+
+            if (window.deleteFromFirestore) {
+                window.deleteFromFirestore(cleanCode);
+            }
+
+            broadcastNetworkEvent({
+                type: 'DELETE_INVITATION',
+                code: cleanCode,
+                timestamp: Date.now()
+            });
+
+            showToast('تم حذف الدعوة بنجاح', 'success');
+            closeDeleteModal();
+        }
+
+        function closeDeleteModal() {
+            pendingDeleteCode = null;
+            document.getElementById('deleteConfirmModal').classList.add('hidden');
+        }
+
+        function clearAllInvitations() {
+            document.getElementById('clearAllConfirmModal').classList.remove('hidden');
+        }
+
+        function closeClearAllModal() {
+            document.getElementById('clearAllConfirmModal').classList.add('hidden');
+        }
+
+        function openScannerModal() {
+            document.getElementById('scannerModal').classList.remove('hidden');
+            const countEl = document.getElementById('scannerStoredCount');
+            if (countEl) countEl.textContent = invitations.length;
+            startScanner();
+        }
+
+        function closeScannerModal() {
+            stopScanner();
+            document.getElementById('scannerModal').classList.add('hidden');
+            const alertEl = document.getElementById('scannerAlert');
+            if (alertEl) alertEl.classList.add('hidden');
+        }
+
+        function startScanner() {
+            const errEl = document.getElementById('scannerErrorMessage');
+            if (errEl) errEl.classList.add('hidden');
+
+            if (!html5QrcodeScanner) {
+                html5QrcodeScanner = new Html5Qrcode("reader");
+            }
+
+            const config = { fps: 10, qrbox: { width: 220, height: 220 } };
+
+            html5QrcodeScanner.start(
+                { facingMode: "environment" },
+                config,
+                (decodedText) => {
+                    const now = Date.now();
+                    if (decodedText === lastScannedCode && (now - lastScannedTime) < 3000) return;
+                    lastScannedCode = decodedText;
+                    lastScannedTime = now;
+                    processQRCode(decodedText);
+                },
+                (errorMessage) => {}
+            ).then(() => {
+                isScannerActive = true;
+            }).catch((err) => {
+                if (errEl) errEl.classList.remove('hidden');
+            });
+        }
+
+        function stopScanner() {
+            if (html5QrcodeScanner && isScannerActive) {
+                html5QrcodeScanner.stop().then(() => {
+                    isScannerActive = false;
+                }).catch(() => {});
+            }
+        }
+
+        function handleQRFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.src = e.target.result;
+                img.onload = function() {
+                    const canvas = document.getElementById('qrCanvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+                    if (code && code.data) {
+                        processQRCode(code.data);
+                    } else {
+                        showScannerAlert('❌ لم يتم التعرف على كود QR في هذه الصورة', 'error');
+                    }
+                };
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function showScannerAlert(msg, type) {
+            const alertEl = document.getElementById('scannerAlert');
+            if (!alertEl) return;
+            alertEl.textContent = msg;
+            alertEl.className = `p-3 rounded-xl text-xs font-bold text-center ${type === 'success' ? 'bg-emerald-950/90 text-emerald-300 border border-emerald-500/50' : 'bg-red-950/90 text-red-300 border border-red-500/50'}`;
+            alertEl.classList.remove('hidden');
+        }
+
+        function processQRCode(codeText) {
+            const cleanCode = codeText.trim().toUpperCase();
+            const item = invitations.find(i => i.code.trim().toUpperCase() === cleanCode);
+
+            if (!item) {
+                playChime('error');
+                showScannerAlert(`❌ كود دعوة غير مسجل بالمنظومة (${cleanCode})`, 'error');
+                return;
+            }
+
+            if (item.attended) {
+                playChime('error');
+                showScannerAlert(`⚠️ المخدومة [ ${item.name} ] مسجلة حضور بالفعل سابقاً!`, 'error');
+                return;
+            }
+
+            item.attended = true;
+            item.attendedAt = new Date().toISOString();
+            saveInvitationsLocal();
+
+            if (window.updateAttendanceInFirestore) {
+                window.updateAttendanceInFirestore(item.code, item.attendedAt);
+            }
+
+            broadcastNetworkEvent({
+                type: 'ATTENDANCE_UPDATE',
+                code: item.code,
+                attendedAt: item.attendedAt,
+                timestamp: Date.now()
+            });
+
+            playChime('success');
+            showScannerAlert(`✅ تم تسجيل دخول المخدومة: ${item.name} (${item.grade})`, 'success');
+            showToast(`✅ تم تسجيل حضور: ${item.name}`, 'success');
+        }
+
+        function getDeletedCodes() {
+            try {
+                const stored = localStorage.getItem(DELETED_KEY);
+                return new Set(stored ? JSON.parse(stored) : []);
+            } catch(e) {
+                return new Set();
+            }
+        }
+
+        function addDeletedCode(code) {
+            if (!code) return;
+            const set = getDeletedCodes();
+            set.add(code.trim().toUpperCase());
+            localStorage.setItem(DELETED_KEY, JSON.stringify(Array.from(set)));
+        }
+
+        function removeDeletedCode(code) {
+            if (!code) return;
+            const set = getDeletedCodes();
+            const clean = code.trim().toUpperCase();
+            if (set.has(clean)) {
+                set.delete(clean);
+                localStorage.setItem(DELETED_KEY, JSON.stringify(Array.from(set)));
+            }
+        }
+
+        function getSyncRoomKey() {
+            return localStorage.getItem('sync_room_key') || 'sec-girls-2026';
+        }
+
+        function setSyncRoomKey(val) {
+            const clean = val.trim().replace(/[^a-zA-Z0-9_-]/g, '') || 'sec-girls-2026';
+            localStorage.setItem('sync_room_key', clean);
+            return clean;
+        }
+
+        function updateSyncUIStatus(isOnline, text) {
+            const badge = document.getElementById('syncStatusBadge');
+            const textEl = document.getElementById('syncStatusText');
+            if (textEl) textEl.textContent = text;
+            if (badge) {
+                if (isOnline) {
+                    badge.className = "px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 flex items-center gap-1.5";
+                } else {
+                    badge.className = "px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-950/80 text-amber-300 border border-amber-500/30 flex items-center gap-1.5";
+                }
+            }
+        }
+
+        function playChime(type = 'success') {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                if (type === 'success') {
+                    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+                    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
+                    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+                    osc.start(ctx.currentTime);
+                    osc.stop(ctx.currentTime + 0.3);
+                } else {
+                    osc.type = 'sawtooth';
+                    osc.frequency.setValueAtTime(200, ctx.currentTime);
+                    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+                    osc.start(ctx.currentTime);
+                    osc.stop(ctx.currentTime + 0.4);
+                }
+            } catch(e){}
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            loadInvitationsFromLocal();
+            renderTicketPreview(null);
+            initRealtimeSyncStream();
+            
+            // Periodic lightweight sync every 8 seconds to guarantee stability across devices
+            setInterval(fetchLatestCloudData, 8000);
+        });
+
+        function compressImage(file, maxWidth = 250, maxHeight = 250, quality = 0.6) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = function(e) {
+                    const img = new Image();
+                    img.src = e.target.result;
+                    img.onload = function() {
+                        let width = img.width;
+                        let height = img.height;
+
+                        if (width > height) {
+                            if (width > maxWidth) {
+                                height = Math.round((height * maxWidth) / width);
+                                width = maxWidth;
+                            }
+                        } else {
+                            if (height > maxHeight) {
+                                width = Math.round((width * maxHeight) / height);
+                                height = maxHeight;
+                            }
+                        }
+
+                        const canvas = document.createElement('canvas');
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        resolve(canvas.toDataURL('image/jpeg', quality));
+                    };
+                    img.onerror = reject;
+                };
+                reader.onerror = reject;
+            });
+        }
+
+        function previewGuestPhoto(event) {
+            const file = event.target.files[0];
+            const nameSpan = document.getElementById('guestPhotoName');
+            const imgPreview = document.getElementById('guestPhotoPreview');
+
+            if (file) {
+                nameSpan.textContent = file.name;
+                compressImage(file, 250, 250, 0.6).then(compressedData => {
+                    selectedGuestPhotoData = compressedData;
+                    imgPreview.src = selectedGuestPhotoData;
+                    imgPreview.classList.remove('hidden');
+                }).catch(err => {
+                    console.error("Image compression error:", err);
+                    showToast('حدث خطأ أثناء معالجة الصورة', 'error');
+                });
+            } else {
+                nameSpan.textContent = "لم يتم اختيار صورة";
+                selectedGuestPhotoData = null;
+                imgPreview.classList.add('hidden');
+            }
+        }
+
+        function prepareLightweightItem(item) {
+            // Strip photo data before broadcasting over lightweight realtime stream to avoid body payload limits
+            const copy = { ...item };
+            if (copy.photo && copy.photo.length > 500) {
+                copy.photo = null;
+            }
+            return copy;
+        }
+
+        function handleCreateInvitation(e) {
+            e.preventDefault();
+            const name = document.getElementById('guestName').value.trim();
+            const grade = document.getElementById('guestGrade').value;
+            const phone = document.getElementById('guestPhone').value.trim();
+
+            if (!name || !grade) {
+                showToast('يرجى ملء البيانات المطلوبة', 'error');
+                return;
+            }
+
+            const code = 'INV-' + Math.floor(100000 + Math.random() * 900000);
+            
+            // Un-blacklist code if previously stored in deleted set
+            removeDeletedCode(code);
+
+            const newInvitation = {
+                code: code,
+                name: name,
+                grade: grade,
+                phone: phone || 'غير محدد',
+                photo: selectedGuestPhotoData || null,
+                createdAt: new Date().toISOString(),
+                attended: false,
+                attendedAt: null
+            };
+
+            invitations.unshift(newInvitation);
+            saveInvitationsLocal();
+
+            if (window.saveToFirestore) {
+                window.saveToFirestore(newInvitation);
+            }
+
+            // Broadcast lightweight version
+            const lightItem = prepareLightweightItem(newInvitation);
+            broadcastNetworkEvent({ 
+                type: 'NEW_INVITATION', 
+                item: lightItem,
+                timestamp: Date.now()
+            });
+
+            renderTicketPreview(newInvitation);
+            showToast('تم إنشاء الدعوة ومزامنتها على جميع الأجهزة بنجاح! ✨', 'success');
+            
+            // Reset Form & Photo Selection
+            document.getElementById('invitationForm').reset();
+            selectedGuestPhotoData = null;
+            document.getElementById('guestPhotoName').textContent = "لم يتم اختيار صورة";
+            document.getElementById('guestPhotoPreview').classList.add('hidden');
+        }
+
+        function renderTicketPreview(item) {
+            const nameDisplay = document.getElementById('displayTicketName');
+            const gradeDisplay = document.getElementById('displayTicketGrade');
+            const codeDisplay = document.getElementById('displayTicketCode');
+            const photoImg = document.getElementById('displayTicketPhoto');
+            const avatarIcon = document.getElementById('displayTicketAvatarIcon');
+            const qrContainer = document.getElementById('qrcode');
+
+            if (!qrContainer) return;
+            qrContainer.innerHTML = "";
+
+            if (!item) {
+                currentCreatedTicketName = "دعوة";
+                nameDisplay.textContent = "الاسم مفرغ";
+                gradeDisplay.textContent = "المرحلة الدراسية";
+                codeDisplay.textContent = "---";
+                if (photoImg) photoImg.classList.add('hidden');
+                if (avatarIcon) avatarIcon.classList.remove('hidden');
+
+                new QRCode(qrContainer, {
+                    text: "EMPTY-CARD",
+                    width: 140,
+                    height: 140,
+                    colorDark : "#0f172a",
+                    colorLight : "#ffffff",
+                    correctLevel : QRCode.CorrectLevel.H
+                });
+                return;
+            }
+
+            currentCreatedTicketName = item.name;
+            nameDisplay.textContent = item.name;
+            gradeDisplay.textContent = item.grade;
+            codeDisplay.textContent = item.code;
+
+            if (item.photo) {
+                if (photoImg) {
+                    photoImg.src = item.photo;
+                    photoImg.classList.remove('hidden');
+                }
+                if (avatarIcon) avatarIcon.classList.add('hidden');
+            } else {
+                if (photoImg) photoImg.classList.add('hidden');
+                if (avatarIcon) avatarIcon.classList.remove('hidden');
+            }
+
+            new QRCode(qrContainer, {
+                text: item.code,
+                width: 140,
+                height: 140,
+                colorDark : "#0f172a",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.H
+            });
+        }
+
+        async function downloadTicketImage() {
+            const ticketNode = document.getElementById('ticketCard');
+            if (!ticketNode) return;
+
+            showToast('جاري تحويل بطاقة الدعوة إلى صورة وحفظها...', 'info');
+
+            try {
+                const btn = ticketNode.querySelector('button');
+                if (btn) btn.style.visibility = 'hidden';
+
+                const canvas = await html2canvas(ticketNode, {
+                    scale: 3,
+                    useCORS: true,
+                    backgroundColor: '#0d0b18',
+                    logging: false
+                });
+
+                if (btn) btn.style.visibility = 'visible';
+
+                const link = document.createElement('a');
+                const cleanName = currentCreatedTicketName.replace(/[^a-zA-Z0-9أ-ي]/g, '_');
+                link.download = `دعوة_${cleanName}.png`;
+                link.href = canvas.toDataURL('image/png', 1.0);
+                link.click();
+
+                showToast('تم حفظ صورة بطاقة الدعوة بنجاح! 📸', 'success');
+            } catch (err) {
+                console.error("Error generating ticket image:", err);
+                showToast('حدث خطأ أثناء حفظ الصورة، يرجى المحاولة مرة أخرى', 'error');
+            }
+        }
+
+        function loadInvitationsFromLocal() {
+            try {
+                const stored = localStorage.getItem(STORAGE_KEY);
+                invitations = stored ? JSON.parse(stored) : [];
+                window.invitations = invitations;
+            } catch(e) {
+                invitations = [];
+                window.invitations = invitations;
+            }
+            renderTable();
+            updateStats();
+        }
+
+        function saveInvitationsLocal() {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(invitations));
+            window.invitations = invitations;
+            renderTable();
+            updateStats();
+        }
+
+        function mergeRemoteInvitations(remoteList) {
+            if (!Array.isArray(remoteList)) return;
+            const deletedSet = getDeletedCodes();
+
+            // Filter out any locally deleted codes from incoming remote items
+            const validRemote = remoteList.filter(item => item && item.code && !deletedSet.has(item.code.trim().toUpperCase()));
+
+            // Filter current local items to remove any deleted codes
+            const filteredLocal = invitations.filter(i => !deletedSet.has(i.code.trim().toUpperCase()));
+            const map = new Map(filteredLocal.map(i => [i.code.trim().toUpperCase(), i]));
+            let updated = (filteredLocal.length !== invitations.length);
+
+            validRemote.forEach(item => {
+                const codeKey = item.code.trim().toUpperCase();
+                const existing = map.get(codeKey);
+
+                if (!existing) {
+                    map.set(codeKey, item);
+                    updated = true;
+                } else {
+                    // Update attendance status if marked attended elsewhere
+                    if (!existing.attended && item.attended) {
+                        existing.attended = true;
+                        existing.attendedAt = item.attendedAt || new Date().toISOString();
+                        updated = true;
+                    }
+                    // Keep existing photo locally if remote didn't carry it
+                    if (!existing.photo && item.photo) {
+                        existing.photo = item.photo;
+                        updated = true;
+                    }
+                }
+            });
+
+            if (updated) {
+                invitations = Array.from(map.values());
+                // Sort newest created first
+                invitations.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+                saveInvitationsLocal();
+            }
+        }
+        window.mergeRemoteInvitations = mergeRemoteInvitations;
+
+        function getChannelTopic() {
+            return `church_sec_girls_${getSyncRoomKey()}`;
+        }
+
+        async function fetchLatestCloudData() {
+            const topic = getChannelTopic();
+            try {
+                const historyRes = await fetch(`https://ntfy.sh/${topic}/json?poll=1`);
+                if (historyRes.ok) {
+                    const textData = await historyRes.text();
+                    const lines = textData.trim().split('\n');
+                    
+                    lines.forEach(line => {
+                        if (!line) return;
+                        try {
+                            const parsed = JSON.parse(line);
+                            if (parsed.message) {
+                                const payload = JSON.parse(parsed.message);
+                                handleNetworkPayload(payload, false);
+                            }
+                        } catch(e) {}
+                    });
+                }
+            } catch(e) {
+                console.warn("Poll cloud sync warning:", e);
+            }
+        }
+
+        async function initRealtimeSyncStream() {
+            const topic = getChannelTopic();
+            updateSyncUIStatus(false, 'جاري المزامنة السحابية...');
+
+            await fetchLatestCloudData();
+
+            if (sseEventSource) {
+                sseEventSource.close();
+            }
+
+            try {
+                sseEventSource = new EventSource(`https://ntfy.sh/${topic}/sse`);
+                
+                sseEventSource.onopen = function() {
+                    updateSyncUIStatus(true, 'متصل ومزامن لحظياً ⚡');
+                };
+
+                sseEventSource.onmessage = function(event) {
+                    try {
+                        const parsed = JSON.parse(event.data);
+                        if (parsed.message) {
+                            const payload = JSON.parse(parsed.message);
+                            handleNetworkPayload(payload, true);
+                        }
+                    } catch(e) {}
+                };
+
+                sseEventSource.onerror = function() {
+                    updateSyncUIStatus(false, 'إعادة الاتصال...');
+                };
+            } catch(e) {
+                updateSyncUIStatus(false, 'وضع احتياطي');
+            }
+        }
+
+        function handleNetworkPayload(payload, isLive = true) {
+            if (!payload || !payload.type) return;
+
+            // Ignore historic CLEAR_ALL or DELETE commands coming from old ntfy history replay
+            const isHistoricCommand = payload.timestamp && payload.timestamp < (APP_SESSION_START_TIME - 10000);
+
+            if (payload.type === 'NEW_INVITATION') {
+                if (payload.item) {
+                    removeDeletedCode(payload.item.code);
+                    mergeRemoteInvitations([payload.item]);
+                    if (isLive) {
+                        showToast(`🎉 وصلت دعوة جديدة: ${payload.item.name} (${payload.item.grade})`, 'info');
+                        playChime('success');
+                    }
+                }
+            } else if (payload.type === 'ATTENDANCE_UPDATE') {
+                const target = invitations.find(i => i.code.trim().toUpperCase() === payload.code.trim().toUpperCase());
+                if (target && !target.attended) {
+                    target.attended = true;
+                    target.attendedAt = payload.attendedAt || new Date().toISOString();
+                    saveInvitationsLocal();
+                    if (isLive) {
+                        showToast(`✅ تم تسجيل حضور: ${target.name}`, 'success');
+                    }
+                }
+            } else if (payload.type === 'DELETE_INVITATION') {
+                if (payload.code && (!isHistoricCommand || isLive)) {
+                    const cleanCode = payload.code.trim().toUpperCase();
+                    addDeletedCode(cleanCode);
+                    invitations = invitations.filter(i => i.code.trim().toUpperCase() !== cleanCode);
+                    saveInvitationsLocal();
+                    if (isLive) {
+                        showToast('🗑️ تم حذف إحدى الدعوات بواسطة خادمة أخرى', 'info');
+                    }
+                }
+            } else if (payload.type === 'CLEAR_ALL') {
+                // Ignore CLEAR_ALL if it comes from historic polling replay
+                if (isLive && !isHistoricCommand) {
+                    invitations.forEach(i => addDeletedCode(i.code));
+                    invitations = [];
+                    saveInvitationsLocal();
+                }
+            } else if (payload.type === 'BULK_SYNC') {
+                if (Array.isArray(payload.data)) {
+                    mergeRemoteInvitations(payload.data);
+                }
+            }
+        }
+
+        async function broadcastNetworkEvent(payload) {
+            const topic = getChannelTopic();
+            try {
+                await fetch(`https://ntfy.sh/${topic}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            } catch(e) {
+                console.error("Broadcast network error:", e);
+            }
+        }
+
+        function triggerManualSync() {
+            showToast('جاري تحديث وتزامن البيانات مع السحابة...', 'info');
+            fetchLatestCloudData().then(() => {
+                // Prepare light bulk list for broadcast
+                const lightList = invitations.map(i => prepareLightweightItem(i));
+                broadcastNetworkEvent({ type: 'BULK_SYNC', data: lightList });
+                showToast('تمت المزامنة بنجاح!', 'success');
+            });
+        }
+
+        function updateSyncRoom() {
+            const inputVal = document.getElementById('serviceRoomInput').value;
+            const cleanKey = setSyncRoomKey(inputVal);
+            document.getElementById('serviceRoomInput').value = cleanKey;
+            
+            // Re-initialize Firestore for new room
+            if (typeof initFirebaseSync === 'function') {
+                initFirebaseSync();
+            }
+            
+            showToast(`تم ربط التطبيق بالقناة: (${cleanKey})`, 'success');
+            initRealtimeSyncStream();
+        }
+
+        function confirmClearAllAction() {
+            if (window.clearAllFromFirestore) {
+                window.clearAllFromFirestore();
+            }
+            invitations.forEach(i => addDeletedCode(i.code));
+            invitations = [];
+            saveInvitationsLocal();
+            broadcastNetworkEvent({ type: 'CLEAR_ALL', timestamp: Date.now() });
+            showToast('تم مسح جميع الدعوات بنجاح', 'success');
+            closeClearAllModal();
+        }
+
+        function updateStats() {
+            const total = invitations.length;
+            const attended = invitations.filter(i => i.attended).length;
+            const pending = total - attended;
+
+            if (document.getElementById('statTotalCount')) document.getElementById('statTotalCount').textContent = total;
+            if (document.getElementById('statAttendedCount')) document.getElementById('statAttendedCount').textContent = attended;
+            if (document.getElementById('statPendingCount')) document.getElementById('statPendingCount').textContent = pending;
+        }
+
+        function exportToExcel(type) {
+            let dataToExport = invitations;
+            let fileName = "كشف_كل_الدعوات.xlsx";
+
+            if (type === 'attended') {
+                dataToExport = invitations.filter(i => i.attended);
+                fileName = "كشف_الحاضرات_النهائي.xlsx";
+            }
+
+            if (dataToExport.length === 0) {
+                showToast('لا توجد بيانات للتصدير!', 'error');
+                return;
+            }
+
+            const formattedData = dataToExport.map((item, idx) => ({
+                "م": idx + 1,
+                "اسم المدعوة": item.name,
+                "السنة الدراسية": item.grade,
+                "رقم الموبايل": item.phone || 'غير محدد',
+                "كود الدعوة": item.code,
+                "حالة الحضور": item.attended ? "حَضَرَت" : "لم تحضر بعد",
+                "توقيت الحضور": item.attendedAt ? new Date(item.attendedAt).toLocaleString('ar-EG') : '-'
+            }));
+
+            const ws = XLSX.utils.json_to_sheet(formattedData);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "الدعوات");
+            XLSX.writeFile(wb, fileName);
+            showToast('تم تصدير ملف الإكسيل بنجاح! 📊', 'success');
+        }
+
+        function openBackupModal() {
+            document.getElementById('backupModal').classList.remove('hidden');
+        }
+        function closeBackupModal() {
+            document.getElementById('backupModal').classList.add('hidden');
+        }
+
+        function downloadJsonBackup() {
+            const blob = new Blob([JSON.stringify(invitations, null, 2)], { type: "application/json" });
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = `invitations_backup_${getSyncRoomKey()}.json`;
+            a.click();
+            showToast('تم تحميل ملف النسخة الاحتياطية بنجاح', 'success');
+        }
+
+        function importJsonBackup(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const imported = JSON.parse(e.target.result);
+                    if (Array.isArray(imported)) {
+                        mergeRemoteInvitations(imported);
+                        const lightList = invitations.map(i => prepareLightweightItem(i));
+                        broadcastNetworkEvent({ type: 'BULK_SYNC', data: lightList });
+                        showToast(`تم استيراد ${imported.length} دعوة بنجاح!`, 'success');
+                        closeBackupModal();
+                    } else {
+                        showToast('تنسيق ملف غير صالح', 'error');
+                    }
+                } catch(err) {
+                    showToast('خطأ أثناء قراءة الملف', 'error');
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            const bgClass = type === 'success' ? 'bg-emerald-600' : (type === 'error' ? 'bg-red-600' : 'bg-purple-600');
+            toast.className = `fixed bottom-5 left-5 z-50 px-5 py-3 rounded-xl text-white font-bold text-xs shadow-2xl transition transform translate-y-0 ${bgClass}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(10px)';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
